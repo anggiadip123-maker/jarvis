@@ -20,7 +20,7 @@
   .u{align-self:flex-end;background:#0b3b55}
   .j{align-self:flex-start;background:#0a1d2e;border:1px solid #124a6b}
   form{display:flex;gap:8px;width:100%;max-width:720px}
-  input,button{font:inherit;border-radius:10px;border:1px solid #124a6b;background:#07131f;color:#cfefff;padding:10px}
+  input,button,select{font:inherit;border-radius:10px;border:1px solid #124a6b;background:#07131f;color:#cfefff;padding:10px}
   input{flex:1}
   button{cursor:pointer;color:var(--c)}
   button:hover{background:#0b2a40}
@@ -35,18 +35,16 @@
 <div id="status">Klik bola atau ketik. Ucapkan "Jarvis ..." pada mode siaga.</div>
 <div id="log"></div>
 <form id="f"><input id="t" placeholder="Ketik perintah..." autocomplete="off"><button>Kirim</button><button type="button" id="standby">Siaga: mati</button></form>
-<details id="set"><summary>Pengaturan (API key gratis)</summary>
-  <p>Ambil key gratis di <a href="https://aistudio.google.com/apikey" target="_blank">aistudio.google.com/apikey</a>, tempel di bawah. Disimpan hanya di browser Anda.</p>
-  <input id="key" type="password" placeholder="Gemini API key">
-  <input id="model" placeholder="Model" value="gemini-3.8-flash">
+<details id="set"><summary>Pengaturan AI (API key gratis)</summary>
+  <p>Pilih AI utama. Isi key untuk satu atau lebih AI di bawah; kalau satu gagal atau sibuk, Jarvis otomatis mencoba AI lain yang punya key. Key hanya disimpan di browser Anda.</p>
+  <select id="prov"></select>
+  <div id="provs"></div>
 </details>
 <script>
 const $=id=>document.getElementById(id);
 const log=$('log'),orb=$('orb'),status=$('status');
 const store={get:k=>{try{return localStorage.getItem(k)||''}catch{return''}},set:(k,v)=>{try{localStorage.setItem(k,v)}catch{}}};
-$('key').value=store.get('jk'); if(store.get('jm')&&!/2\.0/.test(store.get('jm')))$('model').value=store.get('jm');
-$('key').onchange=e=>store.set('jk',e.target.value.trim());
-$('model').onchange=e=>store.set('jm',e.target.value.trim());
+// UI pengaturan dibuat setelah PROV didefinisikan (lihat initSettings)
 
 const SR=window.SpeechRecognition||window.webkitSpeechRecognition;
 let rec,standby=false,busy=false,history=[];
@@ -211,12 +209,60 @@ function local(q){
 }
 
 
+// ===== Banyak AI: Gemini, Groq, OpenRouter, Mistral (key gratis masing-masing) =====
+const SYS='Kamu JARVIS, asisten AI pribadi yang sopan, cerdas, dan ringkas. Jawab dalam bahasa Indonesia, maksimal 3 kalimat kecuali diminta detail. Panggil pengguna "Bos".';
+const PROV={
+  gemini:{name:'Gemini',model:'gemini-3.8-flash',link:'https://aistudio.google.com/apikey'},
+  groq:{name:'Groq',model:'llama-3.3-70b-versatile',url:'https://api.groq.com/openai/v1/chat/completions',link:'https://console.groq.com/keys'},
+  openrouter:{name:'OpenRouter',model:'meta-llama/llama-3.3-70b-instruct:free',url:'https://openrouter.ai/api/v1/chat/completions',link:'https://openrouter.ai/keys'},
+  mistral:{name:'Mistral',model:'mistral-small-latest',url:'https://api.mistral.ai/v1/chat/completions',link:'https://console.mistral.ai/api-keys'}
+};
+const pkey=p=>store.get('k_'+p)||(p==='gemini'?store.get('jk'):'');
+const pmodel=p=>{const m=store.get('m_'+p);return m&&!/gemini-2\.0/.test(m)?m:PROV[p].model};
+(function initSettings(){
+  const sel=$('prov'),box=$('provs');
+  for(const p in PROV){
+    const o=document.createElement('option');o.value=p;o.textContent=PROV[p].name;sel.appendChild(o);
+    const d=document.createElement('div');d.style.marginTop='8px';
+    d.innerHTML=`<b>${PROV[p].name}</b> - <a href="${PROV[p].link}" target="_blank">ambil key gratis</a><input type="password" id="k_${p}" placeholder="API key ${PROV[p].name}"><input id="m_${p}" placeholder="Model">`;
+    box.appendChild(d);
+    const k=d.querySelector('#k_'+p),m=d.querySelector('#m_'+p);
+    k.value=pkey(p);m.value=pmodel(p);
+    k.onchange=()=>store.set('k_'+p,k.value.trim());
+    m.onchange=()=>store.set('m_'+p,m.value.trim());
+  }
+  sel.value=store.get('prov')||'gemini';
+  sel.onchange=()=>store.set('prov',sel.value);
+})();
+async function askOAI(p,key,model){
+  const msgs=[{role:'system',content:SYS},...history.map(h=>({role:h.role==='model'?'assistant':'user',content:h.parts[0].text}))];
+  for(let i=0;i<2;i++){
+    try{
+      const r=await fetch(PROV[p].url,{method:'POST',headers:{'Content-Type':'application/json','Authorization':'Bearer '+key},body:JSON.stringify({model,messages:msgs,max_tokens:600})});
+      const j=await r.json();
+      if(j.error||!r.ok){const m=(j.error&&(j.error.message||j.error))||('HTTP '+r.status);if([429,500,503].includes(r.status)&&!i){await new Promise(z=>setTimeout(z,1500));continue}return{err:PROV[p].name+': '+m}}
+      return{text:j.choices?.[0]?.message?.content||'Maaf, tidak ada jawaban.'};
+    }catch(e){return{err:PROV[p].name+': gagal terhubung ('+e.message+')'}}
+  }
+  return{err:PROV[p].name+': server sibuk'};
+}
 async function ask(q){
-  const key=store.get('jk');
-  if(!key)return 'Masukkan API key Gemini gratis di bagian Pengaturan dulu.';
   history.push({role:'user',parts:[{text:q}]});
   history=history.slice(-20);
-  const model=$('model').value||'gemini-3.8-flash';
+  const sel=$('prov').value;
+  const order=[sel,...Object.keys(PROV).filter(p=>p!==sel)].filter(p=>pkey(p));
+  if(!order.length){history.pop();return 'Masukkan minimal satu API key gratis di Pengaturan dulu (Gemini, Groq, OpenRouter, atau Mistral).'}
+  let last='';
+  for(const p of order){
+    if(p!==order[0])setS('Mencoba '+PROV[p].name+'...');
+    const r=p==='gemini'?await askGemini(pkey(p),pmodel(p)):await askOAI(p,pkey(p),pmodel(p));
+    if(r.text){history.push({role:'model',parts:[{text:r.text}]});return r.text}
+    last=r.err||last;
+  }
+  history.pop();
+  return last+' (coba lagi sebentar lagi)';
+}
+async function askGemini(key,model){
   const body=JSON.stringify({
     systemInstruction:{parts:[{text:'Kamu JARVIS, asisten AI pribadi yang sopan, cerdas, dan ringkas. Jawab dalam bahasa Indonesia, maksimal 3 kalimat kecuali diminta detail. Panggil pengguna "Bos".'}]},
     contents:history});
@@ -234,25 +280,22 @@ async function ask(q){
           if(busyErr(j)){await new Promise(z=>setTimeout(z,1500*(i+1)));continue}
           return null;
         }
-        const a=j.candidates?.[0]?.content?.parts?.[0]?.text||'Maaf, tidak ada jawaban.';
-        history.push({role:'model',parts:[{text:a}]});
-        return a;
+        return j.candidates?.[0]?.content?.parts?.[0]?.text||'Maaf, tidak ada jawaban.';
       }catch(e){err='Gagal terhubung: '+e.message;return null}
     }
     return null;
   }
   let a=await tryModel(model,3);
-  if(a)return a;
+  if(a)return{text:a};
   // cadangan: coba model flash lain yang tersedia untuk key ini
   try{
     setS('Mencari model cadangan...');
     const r=await fetch('https://generativelanguage.googleapis.com/v1beta/models?pageSize=100&key='+key);
     const j=await r.json();
     const alt=(j.models||[]).filter(x=>(x.supportedGenerationMethods||[]).includes('generateContent')&&/flash/.test(x.name)&&!/image|tts|live|audio|thinking|exp/.test(x.name)).map(x=>x.name.replace('models/','')).filter(x=>x!==model).slice(0,4);
-    for(const m of alt){a=await tryModel(m,1);if(a){$('model').value=m;return a}}
+    for(const m of alt){a=await tryModel(m,1);if(a){store.set('m_gemini',m);return{text:a}}}
   }catch{}
-  history.pop();
-  return err+' (coba kirim lagi sebentar lagi)';
+  return{err:'Gemini: '+err};
 }
 
 async function handle(q){
