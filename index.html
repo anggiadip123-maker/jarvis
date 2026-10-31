@@ -113,19 +113,29 @@ async function ask(q){
   history.push({role:'user',parts:[{text:q}]});
   history=history.slice(-20);
   const model=$('model').value||'gemini-3.8-flash';
-  try{
-    const r=await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${key}`,{
-      method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({
-        systemInstruction:{parts:[{text:'Kamu JARVIS, asisten AI pribadi yang sopan, cerdas, dan ringkas. Jawab dalam bahasa Indonesia, maksimal 3 kalimat kecuali diminta detail. Panggil pengguna "Bos".'}]},
-        contents:history})
-    });
-    const j=await r.json();
-    if(j.error)return 'Error: '+j.error.message;
-    const a=j.candidates?.[0]?.content?.parts?.[0]?.text||'Maaf, tidak ada jawaban.';
-    history.push({role:'model',parts:[{text:a}]});
-    return a;
-  }catch(e){return 'Gagal terhubung: '+e.message}
+  const body=JSON.stringify({
+    systemInstruction:{parts:[{text:'Kamu JARVIS, asisten AI pribadi yang sopan, cerdas, dan ringkas. Jawab dalam bahasa Indonesia, maksimal 3 kalimat kecuali diminta detail. Panggil pengguna "Bos".'}]},
+    contents:history});
+  let err='';
+  // coba ulang otomatis kalau server sibuk (503/429)
+  for(let i=0;i<5;i++){
+    try{
+      if(i)setS('Server sibuk, mencoba lagi ('+i+'/4)...');
+      const r=await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${key}`,{
+        method:'POST',headers:{'Content-Type':'application/json'},body});
+      const j=await r.json();
+      if(j.error){
+        err='Error: '+j.error.message;
+        if([429,500,503].includes(j.error.code)||/demand|overload|try again/i.test(j.error.message)){await new Promise(z=>setTimeout(z,2000*(i+1)));continue}
+        break;
+      }
+      const a=j.candidates?.[0]?.content?.parts?.[0]?.text||'Maaf, tidak ada jawaban.';
+      history.push({role:'model',parts:[{text:a}]});
+      return a;
+    }catch(e){err='Gagal terhubung: '+e.message;break}
+  }
+  history.pop();
+  return err+' (coba kirim lagi sebentar lagi)';
 }
 
 async function handle(q){
