@@ -1,0 +1,140 @@
+<!doctype html>
+<html lang="id">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>JARVIS</title>
+<style>
+  :root{--c:#00d4ff;--bg:#02060d}
+  *{box-sizing:border-box}
+  body{margin:0;background:radial-gradient(circle at 50% 30%,#06223a,var(--bg) 70%);color:#cfefff;font-family:Segoe UI,system-ui,sans-serif;min-height:100vh;display:flex;flex-direction:column;align-items:center;padding:16px}
+  h1{letter-spacing:.5em;font-weight:300;color:var(--c);margin:8px 0}
+  #orb{width:150px;height:150px;border-radius:50%;margin:14px 0;border:2px solid var(--c);box-shadow:0 0 30px var(--c),inset 0 0 30px var(--c);background:radial-gradient(circle,#0a4a6a,transparent 70%);cursor:pointer;transition:.3s}
+  #orb.listen{animation:p 1s infinite;box-shadow:0 0 60px #4dff9d,inset 0 0 40px #4dff9d;border-color:#4dff9d}
+  #orb.speak{animation:p .5s infinite;box-shadow:0 0 60px #ffb84d,inset 0 0 40px #ffb84d;border-color:#ffb84d}
+  @keyframes p{50%{transform:scale(1.12)}}
+  #status{color:var(--c);font-size:.9rem;min-height:1.2em}
+  #log{width:100%;max-width:720px;flex:1;overflow:auto;margin:12px 0;display:flex;flex-direction:column;gap:8px}
+  .m{padding:10px 14px;border-radius:12px;max-width:85%;white-space:pre-wrap;line-height:1.4}
+  .u{align-self:flex-end;background:#0b3b55}
+  .j{align-self:flex-start;background:#0a1d2e;border:1px solid #124a6b}
+  form{display:flex;gap:8px;width:100%;max-width:720px}
+  input,button{font:inherit;border-radius:10px;border:1px solid #124a6b;background:#07131f;color:#cfefff;padding:10px}
+  input{flex:1}
+  button{cursor:pointer;color:var(--c)}
+  button:hover{background:#0b2a40}
+  details{max-width:720px;width:100%;font-size:.85rem;margin-top:8px}
+  details input{width:100%;margin-top:6px}
+  a{color:var(--c)}
+</style>
+</head>
+<body>
+<h1>JARVIS</h1>
+<div id="orb" title="Klik untuk bicara"></div>
+<div id="status">Klik bola atau ketik. Ucapkan "Jarvis ..." pada mode siaga.</div>
+<div id="log"></div>
+<form id="f"><input id="t" placeholder="Ketik perintah..." autocomplete="off"><button>Kirim</button><button type="button" id="standby">Siaga: mati</button></form>
+<details id="set"><summary>Pengaturan (API key gratis)</summary>
+  <p>Ambil key gratis di <a href="https://aistudio.google.com/apikey" target="_blank">aistudio.google.com/apikey</a>, tempel di bawah. Disimpan hanya di browser Anda.</p>
+  <input id="key" type="password" placeholder="Gemini API key">
+  <input id="model" placeholder="Model" value="gemini-2.0-flash">
+</details>
+<script>
+const $=id=>document.getElementById(id);
+const log=$('log'),orb=$('orb'),status=$('status');
+const store={get:k=>{try{return localStorage.getItem(k)||''}catch{return''}},set:(k,v)=>{try{localStorage.setItem(k,v)}catch{}}};
+$('key').value=store.get('jk'); if(store.get('jm'))$('model').value=store.get('jm');
+$('key').onchange=e=>store.set('jk',e.target.value.trim());
+$('model').onchange=e=>store.set('jm',e.target.value.trim());
+
+const SR=window.SpeechRecognition||window.webkitSpeechRecognition;
+let rec,standby=false,busy=false,history=[];
+
+function add(txt,cls){const d=document.createElement('div');d.className='m '+cls;d.textContent=txt;log.appendChild(d);log.scrollTop=log.scrollHeight}
+function setS(t,m){status.textContent=t;orb.className=m||''}
+
+function speak(text){
+  return new Promise(res=>{
+    speechSynthesis.cancel();
+    const u=new SpeechSynthesisUtterance(text.replace(/[*#`_]/g,''));
+    u.lang='id-ID';
+    const v=speechSynthesis.getVoices().find(v=>v.lang.startsWith('id'));
+    if(v)u.voice=v;
+    u.onstart=()=>setS('Berbicara...','speak');
+    u.onend=u.onerror=()=>{setS('Siap.');res()};
+    speechSynthesis.speak(u);
+  });
+}
+
+// Perintah lokal (tanpa AI)
+function local(q){
+  const s=q.toLowerCase();
+  const open=(url,msg)=>{window.open(url,'_blank');return msg};
+  if(/jam berapa|waktu sekarang/.test(s))return 'Sekarang pukul '+new Date().toLocaleTimeString('id-ID',{hour:'2-digit',minute:'2-digit'});
+  if(/tanggal|hari apa/.test(s))return 'Hari ini '+new Date().toLocaleDateString('id-ID',{weekday:'long',day:'numeric',month:'long',year:'numeric'});
+  let m;
+  if(m=s.match(/(?:cari|google)\s+(.+)/))return open('https://www.google.com/search?q='+encodeURIComponent(m[1]),'Mencari '+m[1]);
+  if(m=s.match(/(?:putar|youtube)\s+(.+)/))return open('https://www.youtube.com/results?search_query='+encodeURIComponent(m[1]),'Memutar '+m[1]+' di YouTube');
+  if(/buka youtube/.test(s))return open('https://youtube.com','Membuka YouTube');
+  if(/buka (gmail|email)/.test(s))return open('https://mail.google.com','Membuka Gmail');
+  if(/buka maps|peta/.test(s))return open('https://maps.google.com','Membuka Maps');
+  return null;
+}
+
+async function ask(q){
+  const key=store.get('jk');
+  if(!key)return 'Masukkan API key Gemini gratis di bagian Pengaturan dulu.';
+  history.push({role:'user',parts:[{text:q}]});
+  history=history.slice(-20);
+  const model=$('model').value||'gemini-2.0-flash';
+  try{
+    const r=await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${key}`,{
+      method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({
+        systemInstruction:{parts:[{text:'Kamu JARVIS, asisten AI pribadi yang sopan, cerdas, dan ringkas. Jawab dalam bahasa Indonesia, maksimal 3 kalimat kecuali diminta detail. Panggil pengguna "Bos".'}]},
+        contents:history})
+    });
+    const j=await r.json();
+    if(j.error)return 'Error: '+j.error.message;
+    const a=j.candidates?.[0]?.content?.parts?.[0]?.text||'Maaf, tidak ada jawaban.';
+    history.push({role:'model',parts:[{text:a}]});
+    return a;
+  }catch(e){return 'Gagal terhubung: '+e.message}
+}
+
+async function handle(q){
+  q=q.trim(); if(!q||busy)return;
+  busy=true; add(q,'u'); setS('Berpikir...');
+  const a=local(q)??await ask(q);
+  add(a,'j'); await speak(a); busy=false;
+}
+
+function listen(once){
+  if(!SR){setS('Browser tidak mendukung suara. Pakai Chrome/Edge.');return}
+  rec=new SR(); rec.lang='id-ID'; rec.interimResults=false;
+  rec.onstart=()=>setS(standby?'Siaga: ucapkan "Jarvis ..."':'Mendengarkan...','listen');
+  rec.onresult=e=>{
+    let t=e.results[0][0].transcript;
+    if(standby){
+      if(!/jarvis|jarwis|jarvish/i.test(t))return;
+      t=t.replace(/.*?(jarvis|jarwis|jarvish)[, ]*/i,'');
+      if(!t){speak('Ya, Bos?');return}
+    }
+    handle(t);
+  };
+  rec.onend=()=>{orb.className=''; if(standby&&!busy)setTimeout(()=>listen(),300); else if(standby)setTimeout(()=>listen(),1500)};
+  rec.onerror=e=>{if(e.error==='not-allowed'){standby=false;$('standby').textContent='Siaga: mati';setS('Izinkan akses mikrofon.')}};
+  try{rec.start()}catch{}
+}
+
+orb.onclick=()=>{speechSynthesis.cancel();listen(true)};
+$('f').onsubmit=e=>{e.preventDefault();const v=$('t').value;$('t').value='';handle(v)};
+$('standby').onclick=()=>{
+  standby=!standby; $('standby').textContent='Siaga: '+(standby?'hidup':'mati');
+  if(standby)listen(); else{try{rec.abort()}catch{} setS('Siap.')}
+};
+speechSynthesis.onvoiceschanged=()=>{};
+add('Selamat datang, Bos. Saya JARVIS. Masukkan API key gratis di Pengaturan, lalu klik bola dan bicara.','j');
+</script>
+</body>
+</html>
