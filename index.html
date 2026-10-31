@@ -117,23 +117,36 @@ async function ask(q){
     systemInstruction:{parts:[{text:'Kamu JARVIS, asisten AI pribadi yang sopan, cerdas, dan ringkas. Jawab dalam bahasa Indonesia, maksimal 3 kalimat kecuali diminta detail. Panggil pengguna "Bos".'}]},
     contents:history});
   let err='';
-  // coba ulang otomatis kalau server sibuk (503/429)
-  for(let i=0;i<5;i++){
-    try{
-      if(i)setS('Server sibuk, mencoba lagi ('+i+'/4)...');
-      const r=await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${key}`,{
-        method:'POST',headers:{'Content-Type':'application/json'},body});
-      const j=await r.json();
-      if(j.error){
-        err='Error: '+j.error.message;
-        if([429,500,503].includes(j.error.code)||/demand|overload|try again/i.test(j.error.message)){await new Promise(z=>setTimeout(z,2000*(i+1)));continue}
-        break;
-      }
-      const a=j.candidates?.[0]?.content?.parts?.[0]?.text||'Maaf, tidak ada jawaban.';
-      history.push({role:'model',parts:[{text:a}]});
-      return a;
-    }catch(e){err='Gagal terhubung: '+e.message;break}
+  const busyErr=j=>[429,500,503].includes(j.error.code)||/demand|overload|try again|quota/i.test(j.error.message);
+  async function tryModel(m,tries){
+    for(let i=0;i<tries;i++){
+      try{
+        if(i)setS('Server sibuk, mencoba lagi ('+i+'/'+(tries-1)+')...');
+        const r=await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${m}:generateContent?key=${key}`,{
+          method:'POST',headers:{'Content-Type':'application/json'},body});
+        const j=await r.json();
+        if(j.error){
+          err='Error ('+m+'): '+j.error.message;
+          if(busyErr(j)){await new Promise(z=>setTimeout(z,1500*(i+1)));continue}
+          return null;
+        }
+        const a=j.candidates?.[0]?.content?.parts?.[0]?.text||'Maaf, tidak ada jawaban.';
+        history.push({role:'model',parts:[{text:a}]});
+        return a;
+      }catch(e){err='Gagal terhubung: '+e.message;return null}
+    }
+    return null;
   }
+  let a=await tryModel(model,3);
+  if(a)return a;
+  // cadangan: coba model flash lain yang tersedia untuk key ini
+  try{
+    setS('Mencari model cadangan...');
+    const r=await fetch('https://generativelanguage.googleapis.com/v1beta/models?pageSize=100&key='+key);
+    const j=await r.json();
+    const alt=(j.models||[]).filter(x=>(x.supportedGenerationMethods||[]).includes('generateContent')&&/flash/.test(x.name)&&!/image|tts|live|audio|thinking|exp/.test(x.name)).map(x=>x.name.replace('models/','')).filter(x=>x!==model).slice(0,4);
+    for(const m of alt){a=await tryModel(m,1);if(a){$('model').value=m;return a}}
+  }catch{}
   history.pop();
   return err+' (coba kirim lagi sebentar lagi)';
 }
