@@ -92,20 +92,124 @@ function speakBrowser(text){
   });
 }
 
-// Perintah lokal (tanpa AI)
+// ===== Kemampuan lokal (tanpa AI) =====
+const SITES={youtube:'https://youtube.com',gmail:'https://mail.google.com',email:'https://mail.google.com',maps:'https://maps.google.com',peta:'https://maps.google.com',whatsapp:'https://web.whatsapp.com',wa:'https://web.whatsapp.com',facebook:'https://facebook.com',fb:'https://facebook.com',instagram:'https://instagram.com',ig:'https://instagram.com',tiktok:'https://tiktok.com',tokopedia:'https://tokopedia.com',shopee:'https://shopee.co.id',github:'https://github.com',twitter:'https://x.com',x:'https://x.com',drive:'https://drive.google.com',spotify:'https://open.spotify.com',netflix:'https://netflix.com',tradingview:'https://tradingview.com',translate:'https://translate.google.com',telegram:'https://web.telegram.org'};
+const HELP='Saya bisa: jadwal meeting ("jadwal besok jam 9 meeting klien" - saya ingatkan sendiri); pantau aplikasi ("pantau https://appku.com" - saya beri tahu kalau mati); jam & tanggal; timer/pengingat ("timer 5 menit"); catatan ("catat beli beras", "lihat catatan", "hapus catatan"); hitung ("hitung 12 kali 5 tambah 3"); cuaca ("cuaca Jakarta"); kurs ("kurs 100 usd ke idr"); info Wikipedia ("siapa itu Soekarno"); dadu, koin, angka acak; cari Google, putar YouTube, buka situs (WhatsApp, Gmail, Maps, dll); dan ngobrol apa saja lewat AI (terjemahan, resep, ide, tulis pesan, dll).';
+const openUrl=(url,msg)=>{window.open(url,'_blank');return msg};
+const num=n=>Number(n).toLocaleString('id-ID',{maximumFractionDigits:2});
+const notes=()=>{try{return JSON.parse(store.get('jn')||'[]')}catch{return[]}};
+
+async function jget(url){const r=await fetch(url);if(!r.ok)throw new Error(r.status);return r.json()}
+
+async function cuaca(kota){
+  const g=await jget('https://geocoding-api.open-meteo.com/v1/search?count=1&language=id&name='+encodeURIComponent(kota));
+  const p=g.results?.[0]; if(!p)return 'Kota '+kota+' tidak ditemukan.';
+  const w=(await jget(`https://api.open-meteo.com/v1/forecast?latitude=${p.latitude}&longitude=${p.longitude}&current=temperature_2m,relative_humidity_2m,precipitation,weather_code,wind_speed_10m&timezone=auto`)).current;
+  const kode={0:'cerah',1:'cerah berawan',2:'berawan',3:'mendung',45:'berkabut',48:'berkabut',51:'gerimis',53:'gerimis',55:'gerimis lebat',61:'hujan ringan',63:'hujan',65:'hujan lebat',80:'hujan lokal',81:'hujan lokal',82:'hujan deras',95:'badai petir',96:'badai petir',99:'badai petir'}[w.weather_code]||'cuaca tidak diketahui';
+  return `Cuaca di ${p.name}: ${kode}, suhu ${w.temperature_2m} derajat Celsius, kelembapan ${w.relative_humidity_2m} persen, angin ${w.wind_speed_10m} kilometer per jam.`;
+}
+
+async function kurs(jml,dari,ke){
+  const j=await jget('https://open.er-api.com/v6/latest/'+dari);
+  const rate=j.rates?.[ke]; if(!rate)return 'Mata uang tidak dikenal.';
+  return `${num(jml)} ${dari} sekitar ${num(jml*rate)} ${ke}.`;
+}
+
+async function wiki(topik){
+  const j=await jget('https://id.wikipedia.org/api/rest_v1/page/summary/'+encodeURIComponent(topik.trim().replace(/ /g,'_')));
+  if(!j.extract||j.type==='disambiguation')return null;
+  return j.extract.split('. ').slice(0,3).join('. ')+'.';
+}
+
+function hitung(s){
+  let e=s.replace(/,/g,'.').replace(/\b(kali|dikali|x)\b/g,'*').replace(/\b(bagi|dibagi)\b/g,'/').replace(/\b(tambah|ditambah|plus)\b/g,'+').replace(/\b(kurang|dikurang|minus)\b/g,'-').replace(/\bpangkat\b/g,'**').replace(/(\d+(?:\.\d+)?)\s*persen dari\s*(\d+(?:\.\d+)?)/g,'($1/100*$2)').replace(/[^0-9+\-*/().% ]/g,'').trim();
+  if(!/\d/.test(e)||!/[+\-*/%]/.test(e))return null;
+  try{const v=Function('"use strict";return ('+e+')')();return isFinite(v)?'Hasilnya '+num(v):null}catch{return null}
+}
+
+const timers=[];
+function setTimer(n,unit,label){
+  const ms=n*({detik:1,menit:60,jam:3600}[unit])*1000;
+  const t=setTimeout(()=>{const m='Waktu habis, Bos! '+(label?label:n+' '+unit+' sudah berlalu.');add(m,'j');speak(m);try{new Notification('JARVIS',{body:m})}catch{}},ms);
+  timers.push(t);
+  try{if(Notification.permission==='default')Notification.requestPermission()}catch{}
+  return `Baik, timer ${n} ${unit}${label?' untuk '+label:''} dimulai.`;
+}
+
+// ===== Proaktif: jadwal meeting & pantau aplikasi (notifikasi tanpa disuruh) =====
+function pushAlert(msg){add(msg,'j');speak(msg);try{new Notification('JARVIS',{body:msg})}catch{}}
+const load=(k)=>{try{return JSON.parse(store.get(k)||'[]')}catch{return[]}};
+const save=(k,v)=>store.set(k,JSON.stringify(v));
+
+function tambahJadwal(hari,jam,mnt,txt){
+  const d=new Date(); if(hari==='besok')d.setDate(d.getDate()+1);
+  d.setHours(+jam,+(mnt||0),0,0);
+  if(d<new Date()&&!hari)d.setDate(d.getDate()+1);
+  const a=load('ja'); a.push({t:d.getTime(),txt:txt||'Meeting',pre:false,now:false}); a.sort((x,y)=>x.t-y.t); save('ja',a);
+  try{if(Notification.permission==='default')Notification.requestPermission()}catch{}
+  return `Siap. Jadwal "${txt||'Meeting'}" dicatat ${d.toLocaleString('id-ID',{weekday:'long',hour:'2-digit',minute:'2-digit'})}. Saya akan mengingatkan 10 menit sebelumnya dan saat waktunya.`;
+}
+function cekJadwal(){
+  const a=load('ja'),now=Date.now();let ch=false;
+  for(const j of a){
+    if(!j.pre&&!j.now&&j.t-now<=600000&&j.t-now>0){j.pre=true;ch=true;pushAlert('Pengingat, Bos: '+j.txt+' dimulai sekitar 10 menit lagi.')}
+    if(!j.now&&j.t<=now&&now-j.t<3600000){j.now=true;ch=true;pushAlert('Bos, sekarang waktunya: '+j.txt+'.')}
+  }
+  const keep=a.filter(j=>now-j.t<3600000);
+  if(ch||keep.length!==a.length)save('ja',keep);
+}
+
+async function cekPantau(){
+  const a=load('jp');let ch=false;
+  for(const p of a){
+    let up=true;
+    try{const c=new AbortController();setTimeout(()=>c.abort(),8000);await fetch(p.url,{mode:'no-cors',cache:'no-store',signal:c.signal})}catch{up=false}
+    if(up!==p.up){
+      if(p.up!==undefined)pushAlert(up?'Kabar baik, Bos: '+p.url+' sudah pulih dan bisa diakses lagi.':'Peringatan, Bos! Aplikasi '+p.url+' tidak bisa diakses. Kemungkinan ada masalah.');
+      p.up=up;ch=true;
+    }
+  }
+  if(ch)save('jp',a);
+}
+setInterval(cekJadwal,20000);setTimeout(cekJadwal,2000);
+setInterval(cekPantau,60000);setTimeout(cekPantau,5000);
+
 function local(q){
-  const s=q.toLowerCase();
-  const open=(url,msg)=>{window.open(url,'_blank');return msg};
-  if(/jam berapa|waktu sekarang/.test(s))return 'Sekarang pukul '+new Date().toLocaleTimeString('id-ID',{hour:'2-digit',minute:'2-digit'});
-  if(/tanggal|hari apa/.test(s))return 'Hari ini '+new Date().toLocaleDateString('id-ID',{weekday:'long',day:'numeric',month:'long',year:'numeric'});
+  const s=q.toLowerCase().trim().replace(/^jarvis[, ]*/,'');
   let m;
-  if(m=s.match(/(?:cari|google)\s+(.+)/))return open('https://www.google.com/search?q='+encodeURIComponent(m[1]),'Mencari '+m[1]);
-  if(m=s.match(/(?:putar|youtube)\s+(.+)/))return open('https://www.youtube.com/results?search_query='+encodeURIComponent(m[1]),'Memutar '+m[1]+' di YouTube');
-  if(/buka youtube/.test(s))return open('https://youtube.com','Membuka YouTube');
-  if(/buka (gmail|email)/.test(s))return open('https://mail.google.com','Membuka Gmail');
-  if(/buka maps|peta/.test(s))return open('https://maps.google.com','Membuka Maps');
+  if(m=s.match(/jadwal(?:kan)?\s*(besok|hari ini)?\s*(?:jam|pukul)\s*(\d{1,2})(?:[.:](\d{2}))?\s*(.*)/))return tambahJadwal(m[1]==='hari ini'?'':m[1],m[2],m[3],m[4].trim());
+  if(/lihat jadwal|daftar jadwal|jadwal saya|agenda/.test(s)){const a=load('ja');return a.length?'Jadwal Anda: '+a.map(j=>new Date(j.t).toLocaleString('id-ID',{weekday:'short',hour:'2-digit',minute:'2-digit'})+' '+j.txt).join('; '):'Belum ada jadwal.'}
+  if(/hapus (semua )?jadwal/.test(s)){save('ja',[]);return 'Semua jadwal dihapus.'}
+  if(m=s.match(/(?:pantau|monitor)\s+(\S+)/)){let u=m[1];if(!/^https?:/.test(u))u='https://'+u;const a=load('jp');if(!a.some(x=>x.url===u))a.push({url:u});save('jp',a);try{if(Notification.permission==='default')Notification.requestPermission()}catch{}return 'Baik, saya pantau '+u+' tiap menit dan akan memberi tahu kalau mati atau pulih. Biarkan tab ini tetap terbuka.'}
+  if(/daftar pantau|lihat pantau/.test(s)){const a=load('jp');return a.length?'Dipantau: '+a.map(x=>x.url+(x.up===false?' (MATI)':x.up?' (hidup)':'')).join('; '):'Belum ada yang dipantau.'}
+  if(/hapus (semua )?pantau/.test(s)){save('jp',[]);return 'Semua pantauan dihapus.'}
+  if(/bisa apa|bantuan|fitur|kemampuan|help/.test(s))return HELP;
+  if(/jam berapa|waktu sekarang/.test(s))return 'Sekarang pukul '+new Date().toLocaleTimeString('id-ID',{hour:'2-digit',minute:'2-digit'});
+  if(/tanggal berapa|hari apa|tanggal hari ini/.test(s))return 'Hari ini '+new Date().toLocaleDateString('id-ID',{weekday:'long',day:'numeric',month:'long',year:'numeric'});
+
+  if(m=s.match(/(?:timer|alarm|ingatkan(?: saya)?(?: dalam)?|ingetin)\s*(\d+)\s*(detik|menit|jam)\s*(.*)/))return setTimer(+m[1],m[2],m[3].replace(/^(untuk|buat|lagi)\s+/,'').trim());
+  if(/batalkan timer|hentikan timer/.test(s)){timers.splice(0).forEach(clearTimeout);return 'Semua timer dibatalkan.'}
+
+  if(m=s.match(/^(?:catat|catatan:?|ingat bahwa|tulis)\s+(.+)/)){const n=notes();n.push(m[1]);store.set('jn',JSON.stringify(n));return 'Dicatat: '+m[1]}
+  if(/lihat catatan|baca catatan|daftar catatan|catatan saya/.test(s)){const n=notes();return n.length?'Catatan Anda: '+n.map((x,i)=>(i+1)+'. '+x).join('; '):'Belum ada catatan.'}
+  if(/hapus (semua )?catatan/.test(s)){store.set('jn','[]');return 'Semua catatan dihapus.'}
+
+  if(m=s.match(/(?:cuaca|suhu|hujan)(?: di| kota)?\s*(.*)/))return cuaca(m[1].replace(/^(hari ini|sekarang)$/,'').trim()||'Jakarta').catch(()=>'Gagal mengambil data cuaca.');
+  if(m=s.match(/kurs\s+(?:(\d+(?:[.,]\d+)?)\s*)?([a-z]{3})(?:\s+(?:ke|to|jadi)\s+([a-z]{3}))?/))return kurs(parseFloat((m[1]||'1').replace(',','.')),m[2].toUpperCase(),(m[3]||'idr').toUpperCase()).catch(()=>'Gagal mengambil kurs.');
+  if(m=s.match(/^(?:siapa itu|siapa|apa itu|apa yang dimaksud dengan|wikipedia)\s+(.+)/))return wiki(m[1]).catch(()=>null);
+
+  if(/lempar dadu|kocok dadu|dadu/.test(s))return 'Dadu menunjukkan angka '+(1+Math.floor(Math.random()*6));
+  if(/lempar koin|koin/.test(s))return Math.random()<.5?'Hasilnya: Gambar':'Hasilnya: Angka';
+  if(m=s.match(/angka acak(?: antara)?\s*(\d+)\s*(?:sampai|sd|-|dan)\s*(\d+)/))return 'Angka acaknya '+(+m[1]+Math.floor(Math.random()*(+m[2]-+m[1]+1)));
+  if(/hapus riwayat|reset obrolan|lupakan/.test(s)){history=[];log.innerHTML='';return 'Riwayat obrolan dibersihkan.'}
+
+  if(m=s.match(/(?:hitung|berapa)\s+(.+)/)){const h=hitung(m[1]);if(h)return h}
+  if(m=s.match(/(?:cari|google)\s+(.+)/))return openUrl('https://www.google.com/search?q='+encodeURIComponent(m[1]),'Mencari '+m[1]);
+  if(m=s.match(/(?:putar|youtube)\s+(.+)/))return openUrl('https://www.youtube.com/results?search_query='+encodeURIComponent(m[1]),'Memutar '+m[1]+' di YouTube');
+  if(m=s.match(/(?:buka|open)\s+(\w+)/)){const u=SITES[m[1]];if(u)return openUrl(u,'Membuka '+m[1])}
   return null;
 }
+
 
 async function ask(q){
   const key=store.get('jk');
@@ -154,7 +258,8 @@ async function ask(q){
 async function handle(q){
   q=q.trim(); if(!q||busy)return;
   busy=true; add(q,'u'); setS('Berpikir...');
-  const a=local(q)??await ask(q);
+  let a=null;try{a=await local(q)}catch{}
+  if(a==null)a=await ask(q);
   add(a,'j'); await speak(a); busy=false;
 }
 
