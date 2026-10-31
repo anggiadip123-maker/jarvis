@@ -53,7 +53,32 @@ let rec,standby=false,busy=false,history=[];
 function add(txt,cls){const d=document.createElement('div');d.className='m '+cls;d.textContent=txt;log.appendChild(d);log.scrollTop=log.scrollHeight}
 function setS(t,m){status.textContent=t;orb.className=m||''}
 
-function speak(text){
+// TTS gratis Google (suara Indonesia), dipecah per kalimat <=180 karakter
+function chunks(text){
+  const parts=text.replace(/[*#`_]/g,'').match(/[^.!?\n]+[.!?]?/g)||[text];
+  const out=[];
+  for(let p of parts){
+    p=p.trim(); if(!p)continue;
+    while(p.length>180){let i=p.lastIndexOf(' ',180); if(i<1)i=180; out.push(p.slice(0,i)); p=p.slice(i).trim()}
+    if(p)out.push(p);
+  }
+  return out;
+}
+function playChunk(t){
+  return new Promise((ok,fail)=>{
+    const a=new Audio('https://translate.google.com/translate_tts?ie=UTF-8&client=tw-ob&tl=id&q='+encodeURIComponent(t));
+    window._a=a; a.onended=ok; a.onerror=()=>fail(new Error('tts')); a.play().catch(fail);
+  });
+}
+async function speak(text){
+  speechSynthesis.cancel(); if(window._a)window._a.pause();
+  setS('Berbicara...','speak');
+  try{
+    for(const c of chunks(text))await playChunk(c);
+    setS('Siap.');
+  }catch{ await speakBrowser(text) }
+}
+function speakBrowser(text){
   return new Promise(res=>{
     speechSynthesis.cancel();
     const u=new SpeechSynthesisUtterance(text.replace(/[*#`_]/g,''));
@@ -127,7 +152,7 @@ function listen(once){
   try{rec.start()}catch{}
 }
 
-orb.onclick=()=>{speechSynthesis.cancel();listen(true)};
+orb.onclick=()=>{speechSynthesis.cancel();if(window._a)window._a.pause();listen(true)};
 $('f').onsubmit=e=>{e.preventDefault();const v=$('t').value;$('t').value='';handle(v)};
 $('standby').onclick=()=>{
   standby=!standby; $('standby').textContent='Siaga: '+(standby?'hidup':'mati');
