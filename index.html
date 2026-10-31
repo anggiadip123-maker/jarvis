@@ -38,13 +38,13 @@
 <details id="set"><summary>Pengaturan (API key gratis)</summary>
   <p>Ambil key gratis di <a href="https://aistudio.google.com/apikey" target="_blank">aistudio.google.com/apikey</a>, tempel di bawah. Disimpan hanya di browser Anda.</p>
   <input id="key" type="password" placeholder="Gemini API key">
-  <input id="model" placeholder="Model" value="gemini-2.0-flash">
+  <input id="model" placeholder="Model" value="gemini-3.8-flash">
 </details>
 <script>
 const $=id=>document.getElementById(id);
 const log=$('log'),orb=$('orb'),status=$('status');
 const store={get:k=>{try{return localStorage.getItem(k)||''}catch{return''}},set:(k,v)=>{try{localStorage.setItem(k,v)}catch{}}};
-$('key').value=store.get('jk'); if(store.get('jm'))$('model').value=store.get('jm');
+$('key').value=store.get('jk'); if(store.get('jm')&&!/2\.0/.test(store.get('jm')))$('model').value=store.get('jm');
 $('key').onchange=e=>store.set('jk',e.target.value.trim());
 $('model').onchange=e=>store.set('jm',e.target.value.trim());
 
@@ -112,7 +112,7 @@ async function ask(q){
   if(!key)return 'Masukkan API key Gemini gratis di bagian Pengaturan dulu.';
   history.push({role:'user',parts:[{text:q}]});
   history=history.slice(-20);
-  const model=$('model').value||'gemini-2.0-flash';
+  const model=$('model').value||'gemini-3.8-flash';
   try{
     const r=await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${key}`,{
       method:'POST',headers:{'Content-Type':'application/json'},
